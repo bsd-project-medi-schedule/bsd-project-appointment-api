@@ -50,11 +50,11 @@ object NatsClient {
   private def ensureStream(connection: Connection, natsConfig: NatsConfig): IO[Unit] = {
     val jsm = connection.jetStreamManagement()
 
-    val streamConfig =
+    def buildStreamConfig(subjects: List[String]): StreamConfiguration =
       StreamConfiguration
         .builder()
         .name(natsConfig.streamName)
-        .subjects(natsConfig.streamSubjects*)
+        .subjects(subjects*)
         .storageType(StorageType.Memory)
         .retentionPolicy(RetentionPolicy.Limits)
         .maxMessages(10000)
@@ -70,22 +70,25 @@ object NatsClient {
     val StreamNotFound   = 10059
     val SubjectsOverlap  = 10065
 
-    def streamExists(name: String): IO[Boolean] =
+    def getStreamInfo(name: String): IO[Option[StreamInfo]] =
       IO.blocking(jsm.getStreamInfo(name))
-        .as(true)
+        .map(Some(_))
         .recover {
-          case e if isApiCode(e, StreamNotFound) => false
+          case e if isApiCode(e, StreamNotFound) => None
         }
 
-    def updateStream(): IO[Unit] =
-      IO.blocking(jsm.updateStream(streamConfig)).void
+    def updateStreamWithMergedSubjects(existingInfo: StreamInfo): IO[Unit] = {
+      val existingSubjects = existingInfo.getConfiguration.getSubjects.asScala.toSet
+      val newSubjects = natsConfig.streamSubjects.toSet
+      val mergedSubjects = (existingSubjects ++ newSubjects).toList
+      IO.blocking(jsm.updateStream(buildStreamConfig(mergedSubjects))).void
+    }
 
     def addStream(): IO[Unit] =
-      IO.blocking(jsm.addStream(streamConfig)).void
+      IO.blocking(jsm.addStream(buildStreamConfig(natsConfig.streamSubjects))).void
 
     def deleteConflictingStreams(): IO[Unit] =
       IO.blocking(jsm.getStreamNames).flatMap { names =>
-        // iterate effectfully; run deletes sequentially to keep behavior deterministic
         names.asScala.toList
           .filterNot(_ == natsConfig.streamName)
           .traverse_(deleteIfOverlaps)
@@ -94,7 +97,7 @@ object NatsClient {
     def overlapsAny(existingSubjects: java.util.List[String]): Boolean = {
       val set = existingSubjects.asScala.toSet
       natsConfig.streamSubjects.exists { subj =>
-        set.contains(subj) || subjectsOverlap(subj, existingSubjects) // keep your existing helper
+        set.contains(subj) || subjectsOverlap(subj, existingSubjects)
       }
     }
 
@@ -106,7 +109,6 @@ object NatsClient {
           IO.blocking(jsm.deleteStream(existingStreamName)).void
         }
       } yield ())
-        // best-effort: ignore errors checking/deleting other streams
         .handleErrorWith(_ => IO.unit)
 
     def addStreamWithOverlapRepair(): IO[Unit] =
@@ -117,10 +119,10 @@ object NatsClient {
           IO.raiseError(other)
       }
 
-    streamExists(natsConfig.streamName).ifM(
-      ifTrue  = updateStream(),
-      ifFalse = addStreamWithOverlapRepair()
-    )
+    getStreamInfo(natsConfig.streamName).flatMap {
+      case Some(info) => updateStreamWithMergedSubjects(info)
+      case None       => addStreamWithOverlapRepair()
+    }
   }
 
   private def subjectsOverlap(subject: String, existingSubjects: java.util.List[String]): Boolean = {
