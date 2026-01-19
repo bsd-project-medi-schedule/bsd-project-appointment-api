@@ -1,26 +1,27 @@
 package natstools.events
 
-import io.circe._
-import io.circe.generic.semiauto._
+import io.circe.*
+import io.circe.generic.semiauto.*
 import java.time.Instant
 import java.util.UUID
 import nats.NatsEvent
 
-case class AppointmentEmailEvent(
+case class EmailEvent(
   eventId: UUID,
   timestamp: Instant,
   email: String,
   purpose: String,
   metadata: Map[String, String]
 ) extends NatsEvent {
-  val eventType: String = AppointmentEmailEvent.EVENT_TYPE
+  val eventType: String = EmailEvent.EVENT_TYPE
+
   protected def baseEncoder: Encoder[this.type] =
-    AppointmentEmailEvent.codec.asInstanceOf[Encoder[this.type]]
+    EmailEvent.codec.asInstanceOf[Encoder[this.type]]
 }
 
-object AppointmentEmailEvent {
+object EmailEvent {
   private val EVENT_TYPE = "message.email"
-  implicit val codec: Codec[AppointmentEmailEvent] = deriveCodec
+  implicit val codec: Codec[EmailEvent] = deriveCodec
   NatsEvent.register(EVENT_TYPE, codec)
 
   val PURPOSE_CONFIRM = "email.appointment.confirm"

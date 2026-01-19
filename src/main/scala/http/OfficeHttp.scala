@@ -13,14 +13,16 @@ import service.{OfficeService, ServiceService}
 import utils.JwtService
 import utils.UserRanks
 import DTO.{OfficeDTO, ServiceCreateDTO}
+import org.http4s.client.Client
 
 import java.util.UUID
 
 final case class OfficeHttp(
-  officeService: OfficeService,
-  serviceService: ServiceService
 )(implicit
+  officeService: OfficeService,
+  serviceService: ServiceService,
   jwtService: JwtService,
+  client: Client[IO],
   eventBus: EventBus,
   networkConfig: NetworkConfig
 ) {

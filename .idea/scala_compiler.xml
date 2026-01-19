@@ -2,6 +2,20 @@
 <project version="4">
   <component name="ScalaCompilerConfiguration">
     <option name="separateProdTestSources" value="true" />
-    <profile name="sbt 1" modules="bsd-project-appointment-api,bsd-project-appointment-api.main,bsd-project-appointment-api.test" />
+    <profile name="sbt 1" modules="appointment-api,bsd-project-appointment-api,bsd-project-appointment-api.main,bsd-project-appointment-api.test,bsd-project-appointment-api_6918,bsd-project-appointment-api_6918.main,bsd-project-appointment-api_6918.test" />
+    <profile name="sbt 2" modules="appointment-api.main,appointment-api.test">
+      <parameters>
+        <parameter value="-Wconf:any:warning-verbose" />
+        <parameter value="-Xsource:3-cross" />
+        <parameter value="-target:jvm-21" />
+        <parameter value="-release" />
+        <parameter value="21" />
+        <parameter value="-Wconf:src=src_managed/.*:silent" />
+        <parameter value="-Wconf:src=twirl/.*:silent" />
+      </parameters>
+      <plugins>
+        <plugin path="$USER_HOME$/.cache/coursier/v1/https/repo1.maven.org/maven2/com/olegpy/better-monadic-for_2.13/0.3.1/better-monadic-for_2.13-0.3.1.jar" />
+      </plugins>
+    </profile>
   </component>
 </project>

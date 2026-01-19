@@ -8,7 +8,8 @@ final case class NetworkConfig(
   appHost: String,
   appPort: Int,
   trustedOrigins: List[OriginsConfig],
-  secureCookies: Boolean = false
+  secureCookies: Boolean = false,
+  authEndpoint: String
 )
 
 object NetworkConfig extends ConfigCompanionBase[NetworkConfig] {

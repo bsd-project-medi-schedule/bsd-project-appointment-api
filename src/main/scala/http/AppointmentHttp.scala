@@ -8,7 +8,7 @@ import io.circe.syntax.*
 import io.circe.Json
 import nats.EventBus
 import nats.NatsEvent
-import natstools.events.AppointmentEmailEvent
+import natstools.events.EmailEvent
 import org.http4s.circe.*
 import org.http4s.circe.CirceEntityCodec.circeEntityDecoder
 import org.http4s.dsl.io.*
@@ -16,16 +16,18 @@ import org.http4s.HttpRoutes
 import service.{AppointmentService, DoctorService}
 import utils.JwtService
 import utils.UserRanks
-import DTO.{BookAppointmentDTO, AppointmentDTO}
+import DTO.{AppointmentDTO, BookAppointmentDTO}
+import org.http4s.client.Client
 
 import java.time.Instant
 import java.util.UUID
 
 final case class AppointmentHttp(
-  appointmentService: AppointmentService,
-  doctorService: DoctorService
 )(implicit
+  appointmentService: AppointmentService,
+  doctorService: DoctorService,
   jwtService: JwtService,
+  client: Client[IO],
   eventBus: EventBus,
   networkConfig: NetworkConfig
 ) {
@@ -48,8 +50,8 @@ final case class AppointmentHttp(
             (appointmentId, confirmationToken) <- appointmentService.bookAppointment(patientId, bookingData)
             appointment <- appointmentService.readAppointment(appointmentId)
 
-            emailEvent = NatsEvent.create[AppointmentEmailEvent]((id, ts) =>
-              AppointmentEmailEvent(id, ts, patientEmail, AppointmentEmailEvent.PURPOSE_CONFIRM,
+            emailEvent = NatsEvent.create[EmailEvent]((id, ts) =>
+              EmailEvent(id, ts, patientEmail, EmailEvent.PURPOSE_CONFIRM,
                 Map(
                   "name" -> patientName,
                   "appointmentId" -> appointmentId.toString,
@@ -186,8 +188,8 @@ final case class AppointmentHttp(
 
           _ <- appointmentService.cancelAppointment(appointmentId, userId, role)
 
-          cancelEvent = NatsEvent.create[AppointmentEmailEvent]((id, ts) =>
-            AppointmentEmailEvent(id, ts, appointment.patientEmail.getOrElse(""), AppointmentEmailEvent.PURPOSE_CANCELLED,
+          cancelEvent = NatsEvent.create[EmailEvent]((id, ts) =>
+            EmailEvent(id, ts, appointment.patientEmail.getOrElse(""), EmailEvent.PURPOSE_CANCELLED,
               Map(
                 "name" -> appointment.patientName.getOrElse("Patient"),
                 "appointmentTime" -> appointment.appointmentTime.toString,

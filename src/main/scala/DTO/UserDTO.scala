@@ -7,9 +7,7 @@ import java.util.UUID
 case class UserDTO(
   id: UUID,
   email: String,
-  role: Option[Int] = None,
-  firstName: Option[String] = None,
-  lastName: Option[String] = None
+  role: Int,
 )
 
 object UserDTO {

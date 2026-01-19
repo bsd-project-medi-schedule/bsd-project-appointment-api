@@ -3,7 +3,7 @@ package service
 import cats.effect.IO
 import nats.EventBus
 import nats.NatsEvent
-import natstools.events.AppointmentEmailEvent
+import natstools.events.EmailEvent
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.slf4j.Slf4jLogger
 
@@ -20,8 +20,8 @@ final case class ReminderService(
 
       case Right(appointments) =>
         appointments.traverse_ { appointment =>
-          val reminderEvent = NatsEvent.create[AppointmentEmailEvent]((id, ts) =>
-            AppointmentEmailEvent(id, ts, appointment.patientEmail.getOrElse(""), AppointmentEmailEvent.PURPOSE_REMINDER,
+          val reminderEvent = NatsEvent.create[EmailEvent]((id, ts) =>
+            EmailEvent(id, ts, appointment.patientEmail.getOrElse(""), EmailEvent.PURPOSE_REMINDER,
               Map(
                 "name" -> appointment.patientName.getOrElse("Patient"),
                 "appointmentId" -> appointment.id.map(_.toString).getOrElse(""),

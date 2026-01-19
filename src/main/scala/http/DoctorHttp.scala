@@ -8,7 +8,7 @@ import io.circe.syntax.*
 import io.circe.Json
 import nats.EventBus
 import nats.NatsEvent
-import natstools.events.{AppointmentEmailEvent, DoctorCreatedEvent}
+import natstools.events.{DoctorCreatedEvent, EmailEvent}
 import org.http4s.circe.*
 import org.http4s.circe.CirceEntityCodec.circeEntityDecoder
 import org.http4s.dsl.io.*
@@ -19,15 +19,17 @@ import org.http4s.multipart.Multipart
 import service.DoctorService
 import utils.{ExcelService, JwtService, UserRanks}
 import DTO.{DoctorDTO, ScheduleCreateDTO, ScheduleDTO}
+import org.http4s.client.Client
 
 import java.io.ByteArrayInputStream
 import java.time.LocalTime
 import java.util.UUID
 
 final case class DoctorHttp(
-  doctorService: DoctorService
 )(implicit
+  doctorService: DoctorService,
   jwtService: JwtService,
+  client: Client[IO],
   eventBus: EventBus,
   networkConfig: NetworkConfig
 ) {
@@ -84,8 +86,8 @@ final case class DoctorHttp(
                 doctorEvent = NatsEvent.create[DoctorCreatedEvent]((id, ts) =>
                   DoctorCreatedEvent(id, ts, importDto.email, importDto.password, importDto.firstName, importDto.lastName)
                 )
-                welcomeEvent = NatsEvent.create[AppointmentEmailEvent]((id, ts) =>
-                  AppointmentEmailEvent(id, ts, importDto.email, AppointmentEmailEvent.PURPOSE_DOCTOR_WELCOME,
+                welcomeEvent = NatsEvent.create[EmailEvent]((id, ts) =>
+                  EmailEvent(id, ts, importDto.email, EmailEvent.PURPOSE_DOCTOR_WELCOME,
                     Map("name" -> s"${importDto.firstName} ${importDto.lastName}", "field" -> importDto.fieldOfAction))
                 )
                 _ <- HttpUtils.httpPublishEvent(Seq(doctorEvent, welcomeEvent), "Failed to send doctor events")

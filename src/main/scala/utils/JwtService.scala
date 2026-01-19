@@ -8,12 +8,12 @@ import config.objects.AuthConfig
 import java.util.{Date, UUID}
 import scala.util.Try
 
-final case class JwtService(authConfig: AuthConfig) {
+final case class JwtService()(implicit authConfig: AuthConfig) {
 
   private val signer: JWSSigner = new MACSigner(authConfig.secretKey.getBytes)
   private val verifier: JWSVerifier = new MACVerifier(authConfig.secretKey.getBytes)
 
-  def createToken(subject: UUID, role: Int, firstName: Option[String], expirationMinutes: Int = 15): String = {
+  def createToken(subject: UUID, role: Int, firstName: String, expirationMinutes: Int = 15): String = {
     val now = new Date()
     val expirationTime = new Date(now.getTime + expirationMinutes * 60 * 1000)
 
@@ -21,7 +21,7 @@ final case class JwtService(authConfig: AuthConfig) {
       .subject(subject.toString)
       .issuer(authConfig.issuer)
       .claim("role", role)
-      .claim("firstName", firstName.getOrElse(""))
+      .claim("firstName", firstName)
       .issueTime(now)
       .expirationTime(expirationTime)
       .build()
