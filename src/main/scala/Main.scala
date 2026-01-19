@@ -10,6 +10,7 @@ import config.AppConfig
 import config.CORS.MainCorsPolicy
 import config.ConfigUtils
 import config.Logging
+import config.middleware.ErrorHandlerMiddleware
 import db.DbContext
 import db.FlywayMigratorApp
 import doobie.Transactor
@@ -33,6 +34,7 @@ import org.http4s.client.Client
 import org.http4s.ember.client.EmberClientBuilder
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.HttpRoutes
+
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.duration.FiniteDuration
 import scala.language.postfixOps
@@ -123,7 +125,8 @@ object Main extends IOApp.Simple with Logging {
         officeHttp.routes()
       ).reduce(_ <+> _)
 
-      mainCorsRoutes = MainCorsPolicy(allRoutes)
+      routesWithErrorHandling = ErrorHandlerMiddleware(allRoutes)
+      mainCorsRoutes = MainCorsPolicy(routesWithErrorHandling)
 
       userCreatedHandler = UserCreatedHandler(userRepo)
       userDeleteHandler = UserDeleteHandler(userRepo)
