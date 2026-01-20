@@ -20,7 +20,7 @@ final case class JwtService()(implicit authConfig: AuthConfig) {
     val claimsSet = new JWTClaimsSet.Builder()
       .subject(subject.toString)
       .issuer(authConfig.issuer)
-      .claim("role", role)
+      .claim("role", role.toString)
       .claim("firstName", firstName)
       .issueTime(now)
       .expirationTime(expirationTime)
