@@ -184,7 +184,7 @@ object HttpUtils {
       maxAge = Some(0),
       httpOnly = true,
       secure = networkConfig.secureCookies,
-      sameSite = Some(SameSite.Strict),
+      sameSite = Some(SameSite.None),
       path = Some("/")
     )
     val clearedRefreshCookie = ResponseCookie(
@@ -193,7 +193,7 @@ object HttpUtils {
       maxAge = Some(0),
       httpOnly = true,
       secure = networkConfig.secureCookies,
-      sameSite = Some(SameSite.Strict),
+      sameSite = Some(SameSite.None),
       path = Some("/")
     )
     req.map(_.addCookie(clearedJwtCookie).addCookie(clearedRefreshCookie))
