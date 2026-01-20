@@ -9,7 +9,8 @@ final case class NetworkConfig(
   appPort: Int,
   trustedOrigins: List[OriginsConfig],
   secureCookies: Boolean = false,
-  authEndpoint: String
+  authEndpoint: String,
+  cookieDomain: Option[String] = None
 )
 
 object NetworkConfig extends ConfigCompanionBase[NetworkConfig] {
