@@ -112,7 +112,7 @@ object HttpUtils {
       } yield TokenRefreshResult(Some(newJwt), Some(newRefresh))
       else EitherT.rightT[IO, ServiceError](TokenRefreshResult(None, None))
       _ <- EitherT.cond[IO](
-        minRoleNeeded <= role,
+        role <= minRoleNeeded,
         (),
         ServiceError.Unauthorized("Incompatible jwt - refresh")
       ).leftWiden[ServiceError]
