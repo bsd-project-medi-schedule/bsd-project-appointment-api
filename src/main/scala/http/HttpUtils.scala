@@ -98,7 +98,7 @@ object HttpUtils {
         jwtService.verifyToken(jwt.content),
         ServiceError.Forbidden("Invalid access token")
       )
-      role = jwtClaims.getStringClaim("role").toIntOption.getOrElse(2)
+      role = Option(jwtClaims.getClaim("role").asInstanceOf[java.lang.Integer].intValue).getOrElse(2)
       results <- if (isExpired) for {
         loginSession <- validateRefreshToken(refreshTokenHash)
         newJwt =
