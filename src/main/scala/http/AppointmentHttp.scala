@@ -6,21 +6,22 @@ import config.objects.NetworkConfig
 import error.ServiceError
 import io.circe.syntax.*
 import io.circe.Json
+import java.time.Instant
+import java.util.UUID
 import nats.EventBus
 import nats.NatsEvent
 import natstools.events.EmailEvent
 import org.http4s.circe.*
 import org.http4s.circe.CirceEntityCodec.circeEntityDecoder
+import org.http4s.client.Client
 import org.http4s.dsl.io.*
 import org.http4s.HttpRoutes
-import service.{AppointmentService, DoctorService}
+import service.AppointmentService
+import service.DoctorService
 import utils.JwtService
 import utils.UserRanks
-import DTO.{AppointmentDTO, BookAppointmentDTO}
-import org.http4s.client.Client
-
-import java.time.Instant
-import java.util.UUID
+import DTO.AppointmentDTO
+import DTO.BookAppointmentDTO
 
 final case class AppointmentHttp(
 )(implicit
@@ -42,16 +43,23 @@ final case class AppointmentHttp(
       case req @ POST -> Root / "appointment" =>
         req.as[BookAppointmentDTO].flatMap { bookingData =>
           val result = for {
-            (jwtClaims, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
+            (jwtClaims, refreshResult) <-
+              HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
+
             patientId = UUID.fromString(jwtClaims.getSubject)
             patientEmail = Option(jwtClaims.getStringClaim("email")).getOrElse("")
             patientName = Option(jwtClaims.getStringClaim("firstName")).getOrElse("Patient")
 
-            (appointmentId, confirmationToken) <- appointmentService.bookAppointment(patientId, bookingData)
+            (appointmentId, confirmationToken) <-
+              appointmentService.bookAppointment(patientId, bookingData)
             appointment <- appointmentService.readAppointment(appointmentId)
 
             emailEvent = NatsEvent.create[EmailEvent]((id, ts) =>
-              EmailEvent(id, ts, patientEmail, EmailEvent.PURPOSE_CONFIRM,
+              EmailEvent(
+                id,
+                ts,
+                patientEmail,
+                EmailEvent.PURPOSE_CONFIRM,
                 Map(
                   "name" -> patientName,
                   "appointmentId" -> appointmentId.toString,
@@ -60,19 +68,25 @@ final case class AppointmentHttp(
                   "doctorName" -> appointment.doctorName.getOrElse(""),
                   "serviceName" -> appointment.serviceName.getOrElse(""),
                   "officeName" -> appointment.officeName.getOrElse("")
-                ))
+                )
+              )
             )
             _ <- HttpUtils.httpPublishEvent(emailEvent, "Failed to send confirmation email")
-          } yield (appointmentId, confirmationToken)
+          } yield ((appointmentId, confirmationToken), refreshResult)
 
           result.fold(
             err => ErrorMapper.toResponse(err),
-            res => {
-              val (appointmentId, _) = res
-              Created(Json.obj(
-                "id" -> appointmentId.toString.asJson,
-                "message" -> "Appointment booked successfully. Please check your email to confirm.".asJson
-              ))
+            success => {
+              val ((appointmentId, _), refreshResult) = success
+              HttpUtils.handleTokenRefresh(
+                Created(
+                  Json.obj(
+                    "id" -> appointmentId.toString.asJson,
+                    "message" -> "Appointment booked successfully. Please check your email to confirm.".asJson
+                  )
+                ),
+                refreshResult
+              )
             }
           ).flatten
         }
@@ -84,27 +98,37 @@ final case class AppointmentHttp(
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          appointment => Ok(Json.obj(
-            "message" -> "Appointment confirmed successfully".asJson,
-            "appointment" -> appointment.asJson
-          ))
+          appointment =>
+            Ok(
+              Json.obj(
+                "message" -> "Appointment confirmed successfully".asJson,
+                "appointment" -> appointment.asJson
+              )
+            )
         ).flatten
 
       case req @ GET -> Root / "appointment" / "my" :? OffsetMatcher(offset) +& SizeMatcher(size) =>
         val result = for {
-          (jwtClaims, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
+          (jwtClaims, refreshResult) <-
+            HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
           patientId = UUID.fromString(jwtClaims.getSubject)
           appointments <- appointmentService.readPatientAppointments(patientId, offset, size)
-        } yield appointments
+        } yield (appointments, refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          appointments => Ok(appointments.asJson)
+          success => {
+            val (appointments, refreshResult) = success
+            HttpUtils.handleTokenRefresh(Ok(appointments.asJson), refreshResult)
+          }
         ).flatten
 
-      case req @ GET -> Root / "appointment" / "doctor" :? OffsetMatcher(offset) +& SizeMatcher(size) =>
+      case req @ GET -> Root / "appointment" / "doctor" :? OffsetMatcher(offset) +& SizeMatcher(
+            size
+          ) =>
         val result = for {
-          (jwtClaims, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.DOCTOR)
+          (jwtClaims, refreshResult) <-
+            HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.DOCTOR)
           userId = UUID.fromString(jwtClaims.getSubject)
           doctor <- doctorService.readDoctorByUserId(userId)
           doctorId <- EitherT.fromOption[IO](
@@ -112,16 +136,20 @@ final case class AppointmentHttp(
             ServiceError.InternalError("Doctor ID not found"): ServiceError
           )
           appointments <- appointmentService.readDoctorAppointments(doctorId, offset, size)
-        } yield appointments
+        } yield (appointments, refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          appointments => Ok(appointments.asJson)
+          success => {
+            val (appointments, refreshResult) = success
+            HttpUtils.handleTokenRefresh(Ok(appointments.asJson), refreshResult)
+          }
         ).flatten
 
       case req @ GET -> Root / "appointment" / "doctor" / "schedule" :? DateMatcher(dateStr) =>
         val result = for {
-          (jwtClaims, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.DOCTOR)
+          (jwtClaims, refreshResult) <-
+            HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.DOCTOR)
           userId = UUID.fromString(jwtClaims.getSubject)
           doctor <- doctorService.readDoctorByUserId(userId)
           doctorId <- EitherT.fromOption[IO](
@@ -130,27 +158,36 @@ final case class AppointmentHttp(
           )
           date = Instant.parse(dateStr + "T00:00:00Z")
           appointments <- appointmentService.readDoctorScheduleForDate(doctorId, date)
-        } yield appointments
+        } yield (appointments, refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          appointments => Ok(appointments.asJson)
+          success => {
+            val (appointments, refreshResult) = success
+            HttpUtils.handleTokenRefresh(Ok(appointments.asJson), refreshResult)
+          }
         ).flatten
 
-      case req @ GET -> Root / "appointment" / "office" / UUIDVar(officeId) :? OffsetMatcher(offset) +& SizeMatcher(size) =>
+      case req @ GET -> Root / "appointment" / "office" / UUIDVar(officeId) :? OffsetMatcher(
+            offset
+          ) +& SizeMatcher(size) =>
         val result = for {
-          (_, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.ADMIN)
-          appointments <- appointmentService.readOfficeAppointments(officeId, offset, size)
-        } yield appointments
+          (_, refreshResult) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.ADMIN)
+          appointments       <- appointmentService.readOfficeAppointments(officeId, offset, size)
+        } yield (appointments, refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          appointments => Ok(appointments.asJson)
+          success => {
+            val (appointments, refreshResult) = success
+            HttpUtils.handleTokenRefresh(Ok(appointments.asJson), refreshResult)
+          }
         ).flatten
 
       case req @ GET -> Root / "appointment" / UUIDVar(appointmentId) =>
         val result = for {
-          (jwtClaims, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
+          (jwtClaims, refreshResult) <-
+            HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
           userId = UUID.fromString(jwtClaims.getSubject)
           role = jwtClaims.getStringClaim("role").toIntOption.getOrElse(2)
           appointment <- appointmentService.readAppointment(appointmentId)
@@ -159,29 +196,40 @@ final case class AppointmentHttp(
             (),
             ServiceError.Forbidden("Not authorized to view this appointment"): ServiceError
           )
-        } yield appointment
+        } yield (appointment, refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          appointment => Ok(appointment.asJson)
+          success => {
+            val (appointment, refreshResult) = success
+            HttpUtils.handleTokenRefresh(Ok(appointment.asJson), refreshResult)
+          }
         ).flatten
 
       case req @ PUT -> Root / "appointment" / UUIDVar(appointmentId) / "status" / status =>
         val result = for {
-          (jwtClaims, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
+          (jwtClaims, refreshResult) <-
+            HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
           userId = UUID.fromString(jwtClaims.getSubject)
           role = jwtClaims.getStringClaim("role").toIntOption.getOrElse(2)
           _ <- appointmentService.updateAppointmentStatus(appointmentId, status, userId, role)
-        } yield ()
+        } yield ((), refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          _ => Ok(Json.obj("message" -> s"Appointment status updated to $status".asJson))
+          success => {
+            val (_, refreshResult) = success
+            HttpUtils.handleTokenRefresh(
+              Ok(Json.obj("message" -> s"Appointment status updated to $status".asJson)),
+              refreshResult
+            )
+          }
         ).flatten
 
       case req @ DELETE -> Root / "appointment" / UUIDVar(appointmentId) =>
         val result = for {
-          (jwtClaims, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
+          (jwtClaims, refreshResult) <-
+            HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
           userId = UUID.fromString(jwtClaims.getSubject)
           role = jwtClaims.getStringClaim("role").toIntOption.getOrElse(2)
           appointment <- appointmentService.readAppointment(appointmentId)
@@ -189,32 +237,48 @@ final case class AppointmentHttp(
           _ <- appointmentService.cancelAppointment(appointmentId, userId, role)
 
           cancelEvent = NatsEvent.create[EmailEvent]((id, ts) =>
-            EmailEvent(id, ts, appointment.patientEmail.getOrElse(""), EmailEvent.PURPOSE_CANCELLED,
+            EmailEvent(
+              id,
+              ts,
+              appointment.patientEmail.getOrElse(""),
+              EmailEvent.PURPOSE_CANCELLED,
               Map(
                 "name" -> appointment.patientName.getOrElse("Patient"),
                 "appointmentTime" -> appointment.appointmentTime.toString,
                 "doctorName" -> appointment.doctorName.getOrElse(""),
                 "serviceName" -> appointment.serviceName.getOrElse("")
-              ))
+              )
+            )
           )
           _ <- HttpUtils.httpPublishEvent(cancelEvent, "Failed to send cancellation email")
-        } yield ()
+        } yield ((), refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          _ => Ok(Json.obj("message" -> "Appointment cancelled successfully".asJson))
+          success => {
+            val (_, refreshResult) = success
+            HttpUtils.handleTokenRefresh(
+              Ok(Json.obj("message" -> "Appointment cancelled successfully".asJson)),
+              refreshResult
+            )
+          }
         ).flatten
 
-      case req @ GET -> Root / "appointment" / "slots" / UUIDVar(officeId) / UUIDVar(serviceId) :? DateMatcher(dateStr) =>
+      case req @ GET -> Root / "appointment" / "slots" / UUIDVar(officeId) / UUIDVar(
+            serviceId
+          ) :? DateMatcher(dateStr) =>
         val result = for {
-          (_, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
+          (_, refreshResult) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
           date = Instant.parse(dateStr + "T00:00:00Z")
           slots <- appointmentService.getAvailableSlots(officeId, serviceId, date)
-        } yield slots
+        } yield (slots, refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          slots => Ok(slots.asJson)
+          success => {
+            val (slots, refreshResult) = success
+            HttpUtils.handleTokenRefresh(Ok(slots.asJson), refreshResult)
+          }
         ).flatten
 
     }

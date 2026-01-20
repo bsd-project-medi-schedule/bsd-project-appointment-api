@@ -26,13 +26,13 @@ import java.time.LocalTime
 import java.util.UUID
 
 final case class DoctorHttp(
-)(implicit
-  doctorService: DoctorService,
-  jwtService: JwtService,
-  client: Client[IO],
-  eventBus: EventBus,
-  networkConfig: NetworkConfig
-) {
+                           )(implicit
+                             doctorService: DoctorService,
+                             jwtService: JwtService,
+                             client: Client[IO],
+                             eventBus: EventBus,
+                             networkConfig: NetworkConfig
+                           ) {
 
   private object OffsetMatcher extends QueryParamDecoderMatcher[Int]("offset")
   private object SizeMatcher extends QueryParamDecoderMatcher[Int]("size")
@@ -43,20 +43,31 @@ final case class DoctorHttp(
       case req @ POST -> Root / "doctor" =>
         req.as[DoctorDTO].flatMap { doctorData =>
           val result = for {
-            (_, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.ADMIN)
+            (_, refreshResult) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.ADMIN)
             doctorId <- doctorService.createDoctor(doctorData)
-          } yield doctorId
+          } yield (doctorId, refreshResult)
 
           result.fold(
             err => ErrorMapper.toResponse(err),
-            doctorId => Created(Json.obj("id" -> doctorId.toString.asJson, "message" -> "Doctor created successfully".asJson))
+            success => {
+              val (doctorId, refreshResult) = success
+              HttpUtils.handleTokenRefresh(
+                Created(
+                  Json.obj(
+                    "id" -> doctorId.toString.asJson,
+                    "message" -> "Doctor created successfully".asJson
+                  )
+                ),
+                refreshResult
+              )
+            }
           ).flatten
         }
 
       case req @ POST -> Root / "doctor" / "import" / UUIDVar(officeId) =>
         req.decode[Multipart[IO]] { multipart =>
           val result = for {
-            (_, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.ADMIN)
+            (_, refreshResult) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.ADMIN)
             filePart <- EitherT.fromOption[IO](
               multipart.parts.find(_.name.contains("file")),
               ServiceError.BadRequest("No file uploaded"): ServiceError
@@ -87,129 +98,184 @@ final case class DoctorHttp(
                   DoctorCreatedEvent(id, ts, importDto.email, importDto.password, importDto.firstName, importDto.lastName)
                 )
                 welcomeEvent = NatsEvent.create[EmailEvent]((id, ts) =>
-                  EmailEvent(id, ts, importDto.email, EmailEvent.PURPOSE_DOCTOR_WELCOME,
-                    Map("name" -> s"${importDto.firstName} ${importDto.lastName}", "field" -> importDto.fieldOfAction))
+                  EmailEvent(
+                    id,
+                    ts,
+                    importDto.email,
+                    EmailEvent.PURPOSE_DOCTOR_WELCOME,
+                    Map(
+                      "name" -> s"${importDto.firstName} ${importDto.lastName}",
+                      "field" -> importDto.fieldOfAction
+                    )
+                  )
                 )
                 _ <- HttpUtils.httpPublishEvent(Seq(doctorEvent, welcomeEvent), "Failed to send doctor events")
               } yield acc :+ doctorId
             }
-          } yield createdIds
+          } yield (createdIds, refreshResult)
 
           result.fold(
             err => ErrorMapper.toResponse(err),
-            ids => Created(Json.obj(
-              "message" -> s"${ids.size} doctors imported successfully".asJson,
-              "ids" -> ids.map(_.toString).asJson
-            ))
+            success => {
+              val (ids, refreshResult) = success
+              HttpUtils.handleTokenRefresh(
+                Created(
+                  Json.obj(
+                    "message" -> s"${ids.size} doctors imported successfully".asJson,
+                    "ids" -> ids.map(_.toString).asJson
+                  )
+                ),
+                refreshResult
+              )
+            }
           ).flatten
         }
 
       case req @ GET -> Root / "doctor" / "excel-template" =>
-        val result: EitherT[IO, ServiceError, Array[Byte]] = for {
-          (_, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.ADMIN)
+        val result: EitherT[IO, ServiceError, (Array[Byte], Any)] = for {
+          (_, refreshResult) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.ADMIN)
           excelBytes <- EitherT.liftF[IO, ServiceError, Array[Byte]](ExcelService.generateSampleExcel())
-        } yield excelBytes
+        } yield (excelBytes, refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          bytes => Ok(bytes).map(_.withContentType(`Content-Type`(MediaType.application.`vnd.openxmlformats-officedocument.spreadsheetml.sheet`)))
+          success => {
+            val (bytes, refreshResult) = success
+              Ok(bytes).map(_.withContentType(`Content-Type`(MediaType.application.`vnd.openxmlformats-officedocument.spreadsheetml.sheet`)))
+          }
         ).flatten
 
       case req @ GET -> Root / "doctor" :? OffsetMatcher(offset) +& SizeMatcher(size) =>
         val result = for {
-          (_, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
+          (_, refreshResult) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
           doctors <- doctorService.readDoctors(offset, size)
-        } yield doctors
+        } yield (doctors, refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          doctors => Ok(doctors.asJson)
+          success => {
+            val (doctors, refreshResult) = success
+            HttpUtils.handleTokenRefresh(Ok(doctors.asJson), refreshResult)
+          }
         ).flatten
 
       case req @ GET -> Root / "doctor" / "office" / UUIDVar(officeId) :? OffsetMatcher(offset) +& SizeMatcher(size) =>
         val result = for {
-          (_, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
+          (_, refreshResult) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
           doctors <- doctorService.readDoctorsByOffice(officeId, offset, size)
-        } yield doctors
+        } yield (doctors, refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          doctors => Ok(doctors.asJson)
+          success => {
+            val (doctors, refreshResult) = success
+            HttpUtils.handleTokenRefresh(Ok(doctors.asJson), refreshResult)
+          }
         ).flatten
 
       case req @ GET -> Root / "doctor" / UUIDVar(doctorId) =>
         val result = for {
-          (_, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
+          (_, refreshResult) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
           doctor <- doctorService.readDoctor(doctorId)
-        } yield doctor
+        } yield (doctor, refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          doctor => Ok(doctor.asJson)
+          success => {
+            val (doctor, refreshResult) = success
+            HttpUtils.handleTokenRefresh(Ok(doctor.asJson), refreshResult)
+          }
         ).flatten
 
       case req @ GET -> Root / "doctor" / "me" =>
         val result = for {
-          (jwtClaims, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.DOCTOR)
+          (jwtClaims, refreshResult) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.DOCTOR)
           userId = UUID.fromString(jwtClaims.getSubject)
           doctor <- doctorService.readDoctorByUserId(userId)
-        } yield doctor
+        } yield (doctor, refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          doctor => Ok(doctor.asJson)
+          success => {
+            val (doctor, refreshResult) = success
+            HttpUtils.handleTokenRefresh(Ok(doctor.asJson), refreshResult)
+          }
         ).flatten
 
       case req @ PUT -> Root / "doctor" / UUIDVar(doctorId) =>
         req.as[DoctorDTO].flatMap { doctorData =>
           val result = for {
-            (_, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.ADMIN)
+            (_, refreshResult) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.ADMIN)
             _ <- doctorService.updateDoctor(doctorId, doctorData)
-          } yield ()
+          } yield ((), refreshResult)
 
           result.fold(
             err => ErrorMapper.toResponse(err),
-            _ => Ok(Json.obj("message" -> "Doctor updated successfully".asJson))
+            success => {
+              val (_, refreshResult) = success
+              HttpUtils.handleTokenRefresh(
+                Ok(Json.obj("message" -> "Doctor updated successfully".asJson)),
+                refreshResult
+              )
+            }
           ).flatten
         }
 
       case req @ DELETE -> Root / "doctor" / UUIDVar(doctorId) =>
         val result = for {
-          (_, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.ADMIN)
+          (_, refreshResult) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.ADMIN)
           _ <- doctorService.deleteDoctor(doctorId)
-        } yield ()
+        } yield ((), refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          _ => Ok(Json.obj("message" -> "Doctor deleted successfully".asJson))
+          success => {
+            val (_, refreshResult) = success
+            HttpUtils.handleTokenRefresh(
+              Ok(Json.obj("message" -> "Doctor deleted successfully".asJson)),
+              refreshResult
+            )
+          }
         ).flatten
 
       case req @ POST -> Root / "doctor" / UUIDVar(doctorId) / "service" / UUIDVar(serviceId) =>
         val result = for {
-          (_, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.ADMIN)
+          (_, refreshResult) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.ADMIN)
           _ <- doctorService.addServiceToDoctor(doctorId, serviceId)
-        } yield ()
+        } yield ((), refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          _ => Ok(Json.obj("message" -> "Service added to doctor successfully".asJson))
+          success => {
+            val (_, refreshResult) = success
+            HttpUtils.handleTokenRefresh(
+              Ok(Json.obj("message" -> "Service added to doctor successfully".asJson)),
+              refreshResult
+            )
+          }
         ).flatten
 
       case req @ DELETE -> Root / "doctor" / UUIDVar(doctorId) / "service" / UUIDVar(serviceId) =>
         val result = for {
-          (_, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.ADMIN)
+          (_, refreshResult) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.ADMIN)
           _ <- doctorService.removeServiceFromDoctor(doctorId, serviceId)
-        } yield ()
+        } yield ((), refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          _ => Ok(Json.obj("message" -> "Service removed from doctor successfully".asJson))
+          success => {
+            val (_, refreshResult) = success
+            HttpUtils.handleTokenRefresh(
+              Ok(Json.obj("message" -> "Service removed from doctor successfully".asJson)),
+              refreshResult
+            )
+          }
         ).flatten
 
       case req @ POST -> Root / "doctor" / UUIDVar(doctorId) / "schedule" =>
         req.as[ScheduleCreateDTO].flatMap { scheduleData =>
           val result = for {
-            (jwtClaims, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.DOCTOR)
+            (jwtClaims, refreshResult) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.DOCTOR)
             userId = UUID.fromString(jwtClaims.getSubject)
             role = jwtClaims.getStringClaim("role").toIntOption.getOrElse(2)
             doctor <- doctorService.readDoctor(doctorId)
@@ -226,34 +292,54 @@ final case class DoctorHttp(
               slotDurationMin = scheduleData.slotDurationMin
             )
             scheduleId <- doctorService.createSchedule(schedule)
-          } yield scheduleId
+          } yield (scheduleId, refreshResult)
 
           result.fold(
             err => ErrorMapper.toResponse(err),
-            scheduleId => Created(Json.obj("id" -> scheduleId.toString.asJson, "message" -> "Schedule created successfully".asJson))
+            success => {
+              val (scheduleId, refreshResult) = success
+              HttpUtils.handleTokenRefresh(
+                Created(
+                  Json.obj(
+                    "id" -> scheduleId.toString.asJson,
+                    "message" -> "Schedule created successfully".asJson
+                  )
+                ),
+                refreshResult
+              )
+            }
           ).flatten
         }
 
       case req @ GET -> Root / "doctor" / UUIDVar(doctorId) / "schedule" =>
         val result = for {
-          (_, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
+          (_, refreshResult) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.PATIENT)
           schedules <- doctorService.getSchedule(doctorId)
-        } yield schedules
+        } yield (schedules, refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          schedules => Ok(schedules.asJson)
+          success => {
+            val (schedules, refreshResult) = success
+            HttpUtils.handleTokenRefresh(Ok(schedules.asJson), refreshResult)
+          }
         ).flatten
 
       case req @ DELETE -> Root / "doctor" / "schedule" / UUIDVar(scheduleId) =>
         val result = for {
-          (_, _) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.DOCTOR)
+          (_, refreshResult) <- HttpUtils.verifyTokenFromCookie(req.cookies, UserRanks.DOCTOR)
           _ <- doctorService.deleteSchedule(scheduleId)
-        } yield ()
+        } yield ((), refreshResult)
 
         result.fold(
           err => ErrorMapper.toResponse(err),
-          _ => Ok(Json.obj("message" -> "Schedule deleted successfully".asJson))
+          success => {
+            val (_, refreshResult) = success
+            HttpUtils.handleTokenRefresh(
+              Ok(Json.obj("message" -> "Schedule deleted successfully".asJson)),
+              refreshResult
+            )
+          }
         ).flatten
 
     }
